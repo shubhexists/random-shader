@@ -51,7 +51,7 @@ export const metadata = {
     siteName: "Shader Playground",
     images: [
       {
-        url: "https://random-shader.shubh.sh/og-image.png",
+        url: "https://random-shader.shubh.sh/og.png",
         width: 1200,
         height: 630,
         alt: "Shader Playground OG Image",
