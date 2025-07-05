@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -37,12 +38,20 @@ import {
   Code,
   FileCode,
   Sparkles,
+  Send,
+  Wand2,
+  Loader2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import CodeEditor from "./code-editor";
 import ShaderCanvas from "./shader-canvas";
 import ShaderDocumentation from "./shader-documentation";
 import { defaultShaders } from "@/lib/default-shaders";
+import { GoogleGenAI } from "@google/genai";
+
+const genAI = new GoogleGenAI({
+  apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY!,
+});
 
 export default function ShaderPlayground() {
   const [activeShader, setActiveShader] = useState("circles");
@@ -50,6 +59,10 @@ export default function ShaderPlayground() {
   const [isPlaying, setIsPlaying] = useState(true);
   const [time, setTime] = useState(0);
   const [resolution] = useState({ width: 500, height: 500 });
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState(0);
+  const [generationStep, setGenerationStep] = useState("");
   const [parameters, setParameters] = useState({
     speed: 1.0,
     intensity: 0.02,
@@ -104,6 +117,128 @@ export default function ShaderPlayground() {
     setShaderCode(newCode);
   };
 
+  const generateShaderWithAI = async (prompt: string) => {
+    const glslPrompt = `You are an expert GLSL fragment shader programmer. Generate a complete GLSL fragment shader based on the user's description.
+
+IMPORTANT REQUIREMENTS:
+1. The shader MUST use the exact function signature: void mainImage( out vec4 fragColor, in vec2 fragCoord )
+2. Available uniform variables:
+   - iTime: float (current time in seconds)
+   - iResolution: vec2 (canvas resolution)
+   - iScale: float (scale parameter, typically 1.0-20.0)
+   - iIntensity: float (intensity parameter, typically 0.001-0.1)
+   - iColorMultiplier: float (color multiplier, typically 0.1-3.0)
+   - iColorShift: float (color shift, typically 0.0-1.0)
+   - iDistortion: float (distortion parameter, typically 0.0-1.0)
+NOTE - DONT REDEFINE THE ABOVE VARIABLES, ASSUME THEM TO BE ALREADY DEFINED.
+
+3. Convert fragCoord to normalized UV coordinates: vec2 uv = fragCoord / iResolution.xy;
+4. Apply aspect ratio correction: uv.x *= iResolution.x / iResolution.y;
+5. Center coordinates: uv = uv * 2.0 - 1.0;
+6. Use the uniform parameters to make the shader interactive
+7. Create visually appealing effects with smooth animations
+8. Return the final color in fragColor = vec4(color, 1.0);
+
+GLSL Built-in Functions Available:
+- sin(), cos(), tan(), atan(), atan2()
+- length(), distance(), dot(), cross(), normalize()
+- mix(), smoothstep(), step(), clamp()
+- pow(), exp(), log(), sqrt()
+- floor(), ceil(), fract(), mod()
+- abs(), sign(), min(), max()
+
+User Request: ${prompt}
+
+Generate ONLY the GLSL shader code, no explanations or markdown formatting:`;
+
+    const result = await genAI.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: glslPrompt,
+    });
+
+    let generatedCode = result.text;
+    generatedCode = generatedCode!
+      .replace(/```glsl\n?/g, "")
+      .replace(/```\n?/g, "");
+    generatedCode = generatedCode.trim();
+
+    return generatedCode;
+  };
+
+  const handleAiGenerate = async () => {
+    if (!aiPrompt.trim()) {
+      toast({
+        title: "Prompt required",
+        description:
+          "Please enter a description for the shader you want to generate.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!process.env.NEXT_PUBLIC_GEMINI_API_KEY) {
+      toast({
+        title: "API Key missing",
+        description:
+          "Please set your NEXT_PUBLIC_GEMINI_API_KEY environment variable.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsGenerating(true);
+    setGenerationProgress(0);
+    setGenerationStep("Initializing AI generation...");
+
+    try {
+      const progressSteps = [
+        "Analyzing prompt...",
+        "Generating GLSL structure...",
+        "Creating visual algorithms...",
+        "Optimizing shader code...",
+        "Finalizing shader...",
+      ];
+
+      const progressInterval = setInterval(() => {
+        setGenerationProgress((prev) => {
+          const newProgress = prev + 20;
+          if (newProgress < 100) {
+            setGenerationStep(
+              progressSteps[Math.floor(newProgress / 20)] || "Processing..."
+            );
+          }
+          return Math.min(newProgress, 90);
+        });
+      }, 800);
+
+      const generatedShader = await generateShaderWithAI(aiPrompt);
+
+      clearInterval(progressInterval);
+      setGenerationProgress(100);
+      setGenerationStep("Complete!");
+
+      setShaderCode(generatedShader);
+      setActiveShader("ai-generated");
+
+      toast({
+        title: "Shader generated successfully!",
+        description: `Generated shader based on: "${aiPrompt}"`,
+      });
+    } catch (error) {
+      console.error("AI Generation Error:", error);
+      toast({
+        title: "Generation failed",
+        description:
+          "Failed to generate shader. Please check your API key and try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGenerating(false);
+      setGenerationProgress(0);
+      setGenerationStep("");
+    }
+  };
+
   const downloadShader = () => {
     const element = document.createElement("a");
     const file = new Blob([shaderCode], { type: "text/plain" });
@@ -145,6 +280,7 @@ export default function ShaderPlayground() {
       stars: { label: "Space", variant: "secondary" },
       liquid: { label: "Fluids", variant: "outline" },
       kaleidoscope: { label: "Patterns", variant: "default" },
+      "ai-generated": { label: "AI Generated", variant: "default" },
     };
 
     const category = categories[activeShader] || {
@@ -164,7 +300,6 @@ export default function ShaderPlayground() {
               <h1 className="text-3xl font-bold">Shader Playground</h1>
               <Sparkles className="h-6 w-6 text-primary" />
             </div>
-
             <p className="text-muted-foreground">
               Create and experiment with GLSL fragment shaders
             </p>
@@ -440,6 +575,64 @@ export default function ShaderPlayground() {
                       Edit the shader code to see changes in real time
                     </CardDescription>
                   </CardHeader>
+
+                  <div className="px-6 pb-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Wand2 className="h-4 w-4 text-primary" />
+                        <label className="text-sm font-medium">
+                          AI Shader Generation
+                        </label>
+                      </div>
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="Describe the shader you want to generate..."
+                          value={aiPrompt}
+                          onChange={(e) => setAiPrompt(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) {
+                              e.preventDefault();
+                              handleAiGenerate();
+                            }
+                          }}
+                          className="flex-1"
+                          disabled={isGenerating}
+                        />
+                        <Button
+                          onClick={handleAiGenerate}
+                          disabled={isGenerating || !aiPrompt.trim()}
+                          size="sm"
+                          className="px-3"
+                        >
+                          {isGenerating ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Send className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </div>
+
+                      {isGenerating && (
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">
+                              {generationStep}
+                            </span>
+                            <span className="text-muted-foreground">
+                              {Math.round(generationProgress)}%
+                            </span>
+                          </div>
+                          <div className="w-full bg-muted rounded-full h-2">
+                            <div
+                              className="bg-primary rounded-full h-2 transition-all duration-300 ease-out"
+                              style={{ width: `${generationProgress}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                   <CardContent className="flex-1 p-0">
                     <CodeEditor
                       value={shaderCode}
